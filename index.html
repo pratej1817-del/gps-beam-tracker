@@ -1,0 +1,158 @@
+
+clc;
+clear;
+close all;
+
+%% THINGSPEAK SETTINGS
+channelID = '3563025';
+
+% If your channel is PUBLIC, leave this empty.
+% If PRIVATE, enter its Read API Key.
+readAPIKey = 'EFPHXSZWSW5C3DIH';
+
+%% ANTENNA REFERENCE LOCATION
+% Enter the latitude and longitude of your fixed antenna location.
+% You can get these coordinates from Google Maps.
+antennaLat = 13.0702823; 
+antennaLon = 77.6718925;
+
+%% CONSTANTS
+earthRadius = 6371000;   % metres
+referenceLat = deg2rad(antennaLat);
+
+%% FIGURE SETUP
+figure('Name','Live GPS Beam Tracking', ...
+       'NumberTitle','off', ...
+       'Color','w');
+
+hold on;
+grid on;
+axis equal;
+
+xlabel('East-West distance (metres)');
+ylabel('North-South distance (metres)');
+
+title('iPhone GPS Based Live Beam Tracking');
+
+plot(0,0,'ks','MarkerSize',12, ...
+     'MarkerFaceColor','k');
+
+text(2,2,'Fixed Antenna');
+
+phoneMarker = plot(0,0,'bo', ...
+    'MarkerSize',10,'MarkerFaceColor','b');
+
+beamLine = plot([0 30],[0 0],'r-', ...
+    'LineWidth',3);
+
+beamTip = plot(30,0,'ro', ...
+    'MarkerFaceColor','r');
+
+legend('Antenna','iPhone Location','Beam Direction', ...
+       'Beam Tip','Location','best');
+
+xlim([-100 100]);
+ylim([-100 100]);
+
+statusText = text(-95,90,'Waiting for GPS data...', ...
+    'FontSize',10,'Color','b');
+
+lastEntryID = -1;
+
+disp('LIVE GPS BEAM TRACKING STARTED');
+disp('Press Ctrl+C in the Command Window to stop.');
+
+%% CONTINUOUS TRACKING LOOP
+while true
+
+    try
+        % Read latest ThingSpeak channel entry
+        url = sprintf( ...
+          'https://api.thingspeak.com/channels/%s/feeds/last.json', ...
+          channelID);
+
+        if isempty(readAPIKey)
+            data = webread(url);
+        else
+            data = webread(url,'api_key',readAPIKey);
+        end
+
+        % Read latitude and longitude
+        lat = str2double(string(data.field1));
+        lon = str2double(string(data.field2));
+
+        % Check whether valid GPS values are available
+        if ~isfinite(lat) || ~isfinite(lon)
+            disp('Waiting for valid GPS coordinates...');
+            pause(3);
+            continue;
+        end
+
+        % Ignore repeated entries
+        if data.entry_id == lastEntryID
+            pause(3);
+            continue;
+        end
+
+        lastEntryID = data.entry_id;
+
+        %% GPS TO LOCAL DISTANCE CONVERSION
+
+        deltaLat = deg2rad(lat - antennaLat);
+        deltaLon = deg2rad(lon - antennaLon);
+
+        % East and north distances from antenna
+        east = earthRadius * cos(referenceLat) * deltaLon;
+        north = earthRadius * deltaLat;
+
+        %% CALCULATE BEAM ANGLE
+
+        % Angle measured anticlockwise from positive East axis
+        beamAngle = atan2d(north,east);
+
+        % Distance between antenna and phone
+        distance = hypot(east,north);
+
+        %% BEAM DIRECTION COORDINATES
+
+        % Keep the beam visible even when the phone is nearby
+        beamLength = max(30,distance);
+
+        beamX = beamLength*cosd(beamAngle);
+        beamY = beamLength*sind(beamAngle);
+
+        %% UPDATE ANIMATION
+
+        set(phoneMarker,'XData',east,'YData',north);
+
+        set(beamLine,'XData',[0 beamX], ...
+                     'YData',[0 beamY]);
+
+        set(beamTip,'XData',beamX,'YData',beamY);
+
+        % Adjust axes to show the phone's movement
+        viewRange = max(100,1.25*distance + 20);
+
+        xlim([-viewRange viewRange]);
+        ylim([-viewRange viewRange]);
+
+        set(statusText,'String',sprintf( ...
+            'GPS: %.6f, %.6f | Beam: %.2f deg | Distance: %.1f m', ...
+            lat,lon,beamAngle,distance));
+
+        title(sprintf('Live GPS Beam Tracking | Angle = %.2f degrees', ...
+            beamAngle));
+
+        drawnow;
+
+        fprintf('Latitude: %.6f | Longitude: %.6f | Beam: %.2f deg\n', ...
+            lat,lon,beamAngle);
+
+    catch ME
+        disp(['Connection or data error: ' ME.message]);
+    end
+
+    % Poll ThingSpeak every 3 seconds
+    pause(3);
+
+end
