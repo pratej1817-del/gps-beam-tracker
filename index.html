@@ -1,158 +1,280 @@
 
-clc;
-clear;
-close all;
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>6G Smart Antenna - GPS Tracking</title>
 
-%% THINGSPEAK SETTINGS
-channelID = '3563025';
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            text-align: center;
+            background: #f0f4f8;
+            padding: 25px;
+            margin: 0;
+        }
 
-% If your channel is PUBLIC, leave this empty.
-% If PRIVATE, enter its Read API Key.
-readAPIKey = 'EFPHXSZWSW5C3DIH';
+        .container {
+            background: white;
+            max-width: 420px;
+            margin: 30px auto;
+            padding: 25px;
+            border-radius: 15px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+        }
 
-%% ANTENNA REFERENCE LOCATION
-% Enter the latitude and longitude of your fixed antenna location.
-% You can get these coordinates from Google Maps.
-antennaLat = 13.0702823; 
-antennaLon = 77.6718925;
+        h2 {
+            color: #123b67;
+        }
 
-%% CONSTANTS
-earthRadius = 6371000;   % metres
-referenceLat = deg2rad(antennaLat);
+        .info {
+            background: #eef5ff;
+            padding: 15px;
+            border-radius: 10px;
+            margin: 20px 0;
+            text-align: left;
+            line-height: 1.8;
+            overflow-wrap: anywhere;
+        }
 
-%% FIGURE SETUP
-figure('Name','Live GPS Beam Tracking', ...
-       'NumberTitle','off', ...
-       'Color','w');
+        button {
+            padding: 13px 20px;
+            margin: 8px;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            color: white;
+            cursor: pointer;
+        }
 
-hold on;
-grid on;
-axis equal;
+        #startBtn {
+            background: #16834a;
+        }
 
-xlabel('East-West distance (metres)');
-ylabel('North-South distance (metres)');
+        #stopBtn {
+            background: #d93636;
+        }
 
-title('iPhone GPS Based Live Beam Tracking');
+        #status {
+            margin-top: 20px;
+            font-weight: bold;
+            color: #333;
+        }
 
-plot(0,0,'ks','MarkerSize',12, ...
-     'MarkerFaceColor','k');
+        .note {
+            font-size: 13px;
+            color: #666;
+            margin-top: 20px;
+        }
+    </style>
+</head>
 
-text(2,2,'Fixed Antenna');
+<body>
 
-phoneMarker = plot(0,0,'bo', ...
-    'MarkerSize',10,'MarkerFaceColor','b');
+<div class="container">
 
-beamLine = plot([0 30],[0 0],'r-', ...
-    'LineWidth',3);
+    <h2>6G Smart Antenna</h2>
+    <h3>Live GPS Beam Tracking</h3>
 
-beamTip = plot(30,0,'ro', ...
-    'MarkerFaceColor','r');
+    <div class="info">
+        <strong>Latitude:</strong>
+        <span id="latitude">Waiting...</span>
+        <br>
 
-legend('Antenna','iPhone Location','Beam Direction', ...
-       'Beam Tip','Location','best');
+        <strong>Longitude:</strong>
+        <span id="longitude">Waiting...</span>
+        <br>
 
-xlim([-100 100]);
-ylim([-100 100]);
+        <strong>GPS Accuracy:</strong>
+        <span id="accuracy">Waiting...</span>
+        <br>
 
-statusText = text(-95,90,'Waiting for GPS data...', ...
-    'FontSize',10,'Color','b');
+        <strong>Last Update:</strong>
+        <span id="lastUpdate">Not started</span>
+    </div>
 
-lastEntryID = -1;
+    <button id="startBtn" onclick="startTracking()">
+        Start GPS Tracking
+    </button>
 
-disp('LIVE GPS BEAM TRACKING STARTED');
-disp('Press Ctrl+C in the Command Window to stop.');
+    <button id="stopBtn" onclick="stopTracking()">
+        Stop Tracking
+    </button>
 
-%% CONTINUOUS TRACKING LOOP
-while true
+    <p id="status">GPS tracking is stopped.</p>
 
-    try
-        % Read latest ThingSpeak channel entry
-        url = sprintf( ...
-          'https://api.thingspeak.com/channels/%s/feeds/last.json', ...
-          channelID);
+    <p class="note">
+        Keep this webpage open while tracking.
+        Allow location permission when requested.
+    </p>
 
-        if isempty(readAPIKey)
-            data = webread(url);
-        else
-            data = webread(url,'api_key',readAPIKey);
-        end
+</div>
 
-        % Read latitude and longitude
-        lat = str2double(string(data.field1));
-        lon = str2double(string(data.field2));
+<script>
 
-        % Check whether valid GPS values are available
-        if ~isfinite(lat) || ~isfinite(lon)
-            disp('Waiting for valid GPS coordinates...');
-            pause(3);
-            continue;
-        end
+    // THINGSPEAK SETTINGS
 
-        % Ignore repeated entries
-        if data.entry_id == lastEntryID
-            pause(3);
-            continue;
-        end
+    const CHANNEL_ID = "3563025";
 
-        lastEntryID = data.entry_id;
+    // Enter your ThingSpeak WRITE API Key here.
+    const WRITE_KEY = "2F5PLXVOLTK65L8E";
 
-        %% GPS TO LOCAL DISTANCE CONVERSION
+    // GPS SETTINGS
 
-        deltaLat = deg2rad(lat - antennaLat);
-        deltaLon = deg2rad(lon - antennaLon);
+    let watchID = null;
+    let latestPosition = null;
+    let lastSentTime = 0;
+    let tracking = false;
 
-        % East and north distances from antenna
-        east = earthRadius * cos(referenceLat) * deltaLon;
-        north = earthRadius * deltaLat;
+    // Start GPS tracking
 
-        %% CALCULATE BEAM ANGLE
+    function startTracking() {
 
-        % Angle measured anticlockwise from positive East axis
-        beamAngle = atan2d(north,east);
+        if (!navigator.geolocation) {
+            document.getElementById("status").innerText =
+                "GPS is not supported by this browser.";
+            return;
+        }
 
-        % Distance between antenna and phone
-        distance = hypot(east,north);
+        if (tracking) {
+            return;
+        }
 
-        %% BEAM DIRECTION COORDINATES
+        tracking = true;
 
-        % Keep the beam visible even when the phone is nearby
-        beamLength = max(30,distance);
+        document.getElementById("status").innerText =
+            "Waiting for GPS location...";
 
-        beamX = beamLength*cosd(beamAngle);
-        beamY = beamLength*sind(beamAngle);
+        watchID = navigator.geolocation.watchPosition(
 
-        %% UPDATE ANIMATION
+            function(position) {
 
-        set(phoneMarker,'XData',east,'YData',north);
+                latestPosition = position;
 
-        set(beamLine,'XData',[0 beamX], ...
-                     'YData',[0 beamY]);
+                const lat = position.coords.latitude;
+                const lon = position.coords.longitude;
+                const accuracy = position.coords.accuracy;
 
-        set(beamTip,'XData',beamX,'YData',beamY);
+                document.getElementById("latitude").innerText =
+                    lat.toFixed(6);
 
-        % Adjust axes to show the phone's movement
-        viewRange = max(100,1.25*distance + 20);
+                document.getElementById("longitude").innerText =
+                    lon.toFixed(6);
 
-        xlim([-viewRange viewRange]);
-        ylim([-viewRange viewRange]);
+                document.getElementById("accuracy").innerText =
+                    accuracy.toFixed(2) + " metres";
 
-        set(statusText,'String',sprintf( ...
-            'GPS: %.6f, %.6f | Beam: %.2f deg | Distance: %.1f m', ...
-            lat,lon,beamAngle,distance));
+                document.getElementById("status").innerText =
+                    "GPS location received successfully.";
 
-        title(sprintf('Live GPS Beam Tracking | Angle = %.2f degrees', ...
-            beamAngle));
+                // Send GPS data to ThingSpeak
 
-        drawnow;
+                sendGPSData();
 
-        fprintf('Latitude: %.6f | Longitude: %.6f | Beam: %.2f deg\n', ...
-            lat,lon,beamAngle);
+            },
 
-    catch ME
-        disp(['Connection or data error: ' ME.message]);
-    end
+            function(error) {
 
-    % Poll ThingSpeak every 3 seconds
-    pause(3);
+                let message = "GPS Error: ";
 
-end
+                switch(error.code) {
+                    case 1:
+                        message += "Location permission denied.";
+                        break;
+                    case 2:
+                        message += "Location unavailable.";
+                        break;
+                    case 3:
+                        message += "GPS request timed out.";
+                        break;
+                    default:
+                        message += error.message;
+                }
+
+                document.getElementById("status").innerText =
+                    message;
+            },
+
+            {
+                enableHighAccuracy: true,
+                maximumAge: 0,
+                timeout: 20000
+            }
+        );
+    }
+
+
+    // Send GPS coordinates to ThingSpeak
+
+    function sendGPSData() {
+
+        if (!latestPosition || !tracking) {
+            return;
+        }
+
+        // ThingSpeak free accounts require at least
+        // 15 seconds between channel updates.
+
+        const now = Date.now();
+
+        if (now - lastSentTime < 16000) {
+            return;
+        }
+
+        lastSentTime = now;
+
+        const lat = latestPosition.coords.latitude;
+        const lon = latestPosition.coords.longitude;
+        const accuracy = latestPosition.coords.accuracy;
+
+        const url =
+            "https://api.thingspeak.com/update.json" +
+            "?api_key=" + encodeURIComponent(WRITE_KEY) +
+            "&field1=" + encodeURIComponent(lat) +
+            "&field2=" + encodeURIComponent(lon) +
+            "&field3=" + encodeURIComponent(accuracy);
+
+        fetch(url, {
+            method: "GET",
+            mode: "no-cors"
+        })
+        .then(function() {
+
+            document.getElementById("lastUpdate").innerText =
+                new Date().toLocaleTimeString();
+
+            document.getElementById("status").innerText =
+                "GPS update request sent to ThingSpeak.";
+
+        })
+        .catch(function(error) {
+
+            document.getElementById("status").innerText =
+                "Error sending GPS data: " + error.message;
+
+        });
+    }
+
+
+    // Stop GPS tracking
+
+    function stopTracking() {
+
+        tracking = false;
+
+        if (watchID !== null) {
+            navigator.geolocation.clearWatch(watchID);
+            watchID = null;
+        }
+
+        latestPosition = null;
+
+        document.getElementById("status").innerText =
+            "GPS tracking stopped.";
+    }
+
+</script>
+
+</body>
+</html>
